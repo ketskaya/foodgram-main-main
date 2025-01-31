@@ -53,7 +53,6 @@ class SubscriptionAdmin(admin.ModelAdmin):
 class RecipeIngredientInline(admin.TabularInline):
     model = RecipeIngredient
     extra = 1
-    min_num = 1
 
 
 @admin.register(Ingredient)
