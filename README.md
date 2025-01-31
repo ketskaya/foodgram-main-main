@@ -9,7 +9,7 @@
 
 1. Клонируйте репозиторий:
    
-   `git clone https://github.com/ketskaya/foodgram.git`
+   `git clone https://github.com/ketskaya/foodgram-main-main.git`
 
 2. Перейдите в директорию `infra`:
    
