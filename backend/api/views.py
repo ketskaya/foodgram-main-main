@@ -1,18 +1,23 @@
+import base64
 from rest_framework import viewsets, status
-from rest_framework.permissions import IsAuthenticated, IsAuthenticatedOrReadOnly
+from rest_framework.permissions import (IsAuthenticated,
+                                        IsAuthenticatedOrReadOnly)
 from rest_framework.response import Response
 from rest_framework.decorators import action
 from rest_framework.viewsets import ModelViewSet
-from rest_framework.exceptions import PermissionDenied, NotFound
+from rest_framework.exceptions import (PermissionDenied,
+                                       ValidationError)
 from django.shortcuts import get_object_or_404
 from djoser.views import UserViewSet as DjoserUserViewSet
+from django.core.files.base import ContentFile
 from rest_framework.filters import SearchFilter
 from django.http import HttpResponse
 from django.urls import reverse
 from django_filters.rest_framework import DjangoFilterBackend
-from recipes.models import Ingredient, Recipe, FavoriteRecipe, ShoppingCart, User, Subscription
-from .serializers import IngredientSerializer, RecipeSerializer, UsersSerializer, SubscriptionRecipeSerializer
-
+from recipes.models import (Ingredient, Recipe, FavoriteRecipe, ShoppingCart,
+                            User, Subscription)
+from .serializers import (IngredientSerializer, RecipeSerializer,
+                          UsersSerializer, UserWithRecipesSerializer)
 from .filters import RecipeFilter
 from .pagination import PageToOffsetPagination
 
@@ -34,9 +39,10 @@ class IngredientViewSet(viewsets.ReadOnlyModelViewSet):
 
 class RecipeViewSet(ModelViewSet):
     queryset = Recipe.objects.select_related("author").all()
+    serializer_class = RecipeSerializer
     permission_classes = [IsAuthenticatedOrReadOnly]
     pagination_class = PageToOffsetPagination
-    filter_backends = [DjangoFilterBackend]
+    filter_backends = (DjangoFilterBackend,)
     filterset_class = RecipeFilter
 
     def get_serializer_class(self):
@@ -47,111 +53,109 @@ class RecipeViewSet(ModelViewSet):
 
     def get_queryset(self):
         queryset = super().get_queryset()
-
         author_id = self.request.query_params.get('author_id', None)
         if author_id:
             queryset = queryset.filter(author__id=author_id)
-
         is_favorited = self.request.query_params.get('is_favorited', None)
-        if is_favorited:
+        if is_favorited is not None:
             user = self.request.user
-            if is_favorited == '1':
-                queryset = queryset.filter(favoriterecipe__user=user)
-            elif is_favorited == '0':
-                queryset = queryset.exclude(favoriterecipe__user=user)
-
+            if user.is_authenticated:
+                if is_favorited in ['1', 'true']:
+                    favorite_recipes = (
+                        FavoriteRecipe.objects.filter(user=user)
+                        .values('recipe')
+                    )
+                    queryset = queryset.filter(id__in=favorite_recipes)
+                else:
+                    favorite_recipes = (
+                        FavoriteRecipe.objects.filter(user=user)
+                        .values('recipe')
+                    )
+                    queryset = queryset.exclude(id__in=favorite_recipes)
         return queryset
 
-    def handle_collection_action(self, request, recipe_id, model, collection_name, action_type):
-        try:
-            recipe = get_object_or_404(Recipe, pk=recipe_id)
-        except Recipe.DoesNotExist:
-            return Response({'detail': 'Рецепт не найден.'}, status=status.HTTP_404_NOT_FOUND)
-
-        if not request.user.is_authenticated:
-            return Response({'detail': 'Необходима авторизация.'}, status=status.HTTP_401_UNAUTHORIZED)
-
+    @staticmethod
+    def handle_recipe_action(model, user, recipe, action_type):
         if action_type == 'add':
-            if model.objects.filter(user=request.user, recipe=recipe).exists():
-                return Response({'detail': f'Рецепт уже в {collection_name}.'}, status=status.HTTP_400_BAD_REQUEST)
-            model.objects.create(user=request.user, recipe=recipe)
-            return Response({'detail': f'Рецепт добавлен в {collection_name}.'}, status=status.HTTP_201_CREATED)
-
+            obj, created = model.objects.get_or_create(
+                user=user,
+                recipe=recipe
+            )
+            if not created:
+                raise ValidationError('Рецепт уже добавлен.')
+            return Response({
+                'id': recipe.id,
+                'name': recipe.name,
+                'image': recipe.image.url if recipe.image else None,
+                'cooking_time': recipe.cooking_time
+            }, status=status.HTTP_201_CREATED)
         elif action_type == 'remove':
-            obj = model.objects.filter(user=request.user, recipe=recipe)
+            obj = model.objects.filter(user=user, recipe=recipe)
             if not obj.exists():
-                return Response({'detail': f'Рецепт не найден в {collection_name}.'}, status=status.HTTP_400_BAD_REQUEST)
+                raise ValidationError('Рецепт не найден.')
             obj.delete()
-            return Response({'detail': f'Рецепт удалён из {collection_name}.'}, status=status.HTTP_204_NO_CONTENT)
+            return Response(status=status.HTTP_204_NO_CONTENT)
 
-    @action(detail=True, methods=['delete'], permission_classes=[IsAuthenticated])
-    def delete_recipe(self, request, pk=None):
+    @action(detail=True, methods=['post'],
+            permission_classes=[IsAuthenticated])
+    def shopping_cart(self, request, pk=None):
         recipe = get_object_or_404(Recipe, pk=pk)
-        if recipe.author != request.user:
-            return Response({'detail': 'Вы не можете удалить этот рецепт.'}, status=status.HTTP_403_FORBIDDEN)
-        recipe.delete()
-        return Response(status=status.HTTP_204_NO_CONTENT)
+        return self.handle_recipe_action(ShoppingCart, request.user, recipe,
+                                         'add')
 
-    @action(detail=True, methods=['post'], permission_classes=[IsAuthenticated])
-    def add_to_favorites(self, request, pk):
-        return self.handle_collection_action(request, pk, FavoriteRecipe, 'избранное', 'add')
+    @shopping_cart.mapping.delete
+    def remove_from_shopping_cart(self, request, pk=None):
+        recipe = get_object_or_404(Recipe, pk=pk)
+        return self.handle_recipe_action(ShoppingCart, request.user, recipe,
+                                         'remove')
 
-    @add_to_favorites.mapping.delete
-    def remove_from_favorites(self, request, pk):
-        try:
-            if not request.user.is_authenticated:
-                return Response({'detail': 'Необходима авторизация.'}, status=status.HTTP_401_UNAUTHORIZED)
-            recipe = get_object_or_404(Recipe, pk=pk)
-            favorite_item = FavoriteRecipe.objects.filter(user=request.user, recipe=recipe)
-            if not favorite_item.exists():
-                return Response({'detail': 'Рецепт не найден в избранном.'}, status=status.HTTP_400_BAD_REQUEST)
-            favorite_item.delete()
-            return Response({'detail': 'Рецепт удалён из избранного.'}, status=status.HTTP_204_NO_CONTENT)
-        except Recipe.DoesNotExist:
-            return Response({'detail': 'Рецепт не найден.'}, status=status.HTTP_404_NOT_FOUND)
+    @action(detail=True, methods=['post'],
+            permission_classes=[IsAuthenticated])
+    def favorite(self, request, pk=None):
+        recipe = get_object_or_404(Recipe, pk=pk)
+        return self.handle_recipe_action(FavoriteRecipe, request.user, recipe,
+                                         'add')
 
-    @action(detail=True, methods=['post'], permission_classes=[IsAuthenticated])
-    def add_to_shopping_cart(self, request, pk):
-        return self.handle_collection_action(request, pk, ShoppingCart, 'список покупок', 'add')
+    @favorite.mapping.delete
+    def remove_from_favorites(self, request, pk=None):
+        recipe = get_object_or_404(Recipe, pk=pk)
+        return self.handle_recipe_action(FavoriteRecipe, request.user, recipe,
+                                         'remove')
 
-    @add_to_shopping_cart.mapping.delete
-    def remove_from_shopping_cart(self, request, pk):
-        if not request.user.is_authenticated:
-            return Response({'detail': 'Необходима авторизация.'}, status=status.HTTP_401_UNAUTHORIZED)
+    @action(detail=True, methods=['get'], url_path='get-link')
+    def get_link(self, request, pk=None):
+        recipe = self.get_object()
+        return Response({'short-link': request.build_absolute_uri(
+            reverse('recipe_redirect', args=[recipe.pk])
+        )}, status=status.HTTP_200_OK)
 
-        try:
-            recipe = get_object_or_404(Recipe, pk=pk)
-        except Recipe.DoesNotExist:
-            return Response({'detail': 'Рецепт не найден.'}, status=status.HTTP_404_NOT_FOUND)
-
-        cart_item = ShoppingCart.objects.filter(user=request.user, recipe=recipe)
-        if not cart_item.exists():
-            return Response({'detail': 'Рецепт не найден в корзине.'}, status=status.HTTP_400_BAD_REQUEST)
-
-        cart_item.delete()
-        return Response(status=status.HTTP_204_NO_CONTENT)
-
-    @action(detail=False, methods=['get'], permission_classes=[IsAuthenticated])
-    def download_shopping_list(self, request):
-        shopping_cart = request.user.shopping_cart.all()
+    @action(detail=False, permission_classes=[IsAuthenticated])
+    def download_shopping_cart(self, request):
+        user = request.user
+        shopping_cart = user.shopping_carts.all()
         if not shopping_cart.exists():
-            return Response({'detail': 'Список покупок пуст.'}, status=status.HTTP_200_OK)
+            return Response({'detail': 'Список покупок пуст.'},
+                            status=status.HTTP_200_OK)
 
         shopping_list = 'Список покупок:\n\n'
         for item in shopping_cart:
             recipe = item.recipe
-            shopping_list += f'- {recipe.name} (время приготовления: {recipe.cooking_time} мин.)\n'
+            shopping_list += (
+                f'- {recipe.name} '
+                f'(время приготовления: {recipe.cooking_time} мин.)\n'
+            )
 
         response = HttpResponse(shopping_list, content_type='text/plain')
-        response['Content-Disposition'] = 'attachment; filename="shopping_list.txt"'
+        response['Content-Disposition'] = (
+            'attachment; '
+            'filename="shopping_list.txt"'
+        )
         return response
 
-    @action(detail=True, methods=['get'], permission_classes=[IsAuthenticatedOrReadOnly])
-    def get_short_link(self, request, pk):
-        short_link = request.build_absolute_uri(
-            reverse('recipe_redirect', kwargs={'short_id': pk})
-        )
-        return Response({"short-link": short_link}, status=status.HTTP_200_OK)
+    def perform_destroy(self, instance):
+        if instance.author != self.request.user:
+            raise PermissionDenied("Вы не можете удалять чужие рецепты.")
+        instance.delete()
 
     def perform_update(self, serializer):
         recipe = self.get_object()
@@ -171,96 +175,79 @@ class UserViewSet(DjoserUserViewSet):
     serializer_class = UsersSerializer
     permission_classes = (IsAuthenticatedOrReadOnly,)
 
-    @action(detail=True, methods=['get'], permission_classes=[IsAuthenticated], url_path='profile')
-    def get_profile(self, request, pk=None):
-        user = get_object_or_404(User, pk=pk)
-        is_subscribed = user.followers.filter(user=request.user).exists()
-        user_data = {
-            'username': user.username,
-            'email': user.email,
-            'first_name': user.first_name,
-            'last_name': user.last_name,
-            'avatar': user.avatar.url if user.avatar else None,
-            'is_subscribed': is_subscribed
-        }
-        return Response(user_data, status=status.HTTP_200_OK)
+    @action(detail=False, methods=['get'],
+            permission_classes=[IsAuthenticated])
+    def me(self, request, *args, **kwargs):
+        return super().me(request, *args, **kwargs)
 
-    @action(detail=False, methods=['put', 'delete'], permission_classes=[IsAuthenticated], url_path='me/avatar')
-    def update_avatar(self, request):
+    @action(detail=True, methods=['post', 'delete'],
+            permission_classes=[IsAuthenticated])
+    def subscribe(self, request, id=None):
+        user = request.user
+        author = self.get_object()
+        if request.method == 'POST':
+            if user == author:
+                return Response(
+                    {'error': 'Нельзя подписаться на самого себя.'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            subscription, created = user.followers.get_or_create(author=author)
+            if not created:
+                return Response(
+                    {'error': 'Вы уже подписаны на этого пользователя.'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            serializer = UserWithRecipesSerializer(
+                author, context={'request': request}
+            )
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
+        try:
+            subscription = user.followers.get(author=author)
+            subscription.delete()
+            return Response(status=status.HTTP_204_NO_CONTENT)
+        except Subscription.DoesNotExist:
+            raise ValidationError('Вы не подписаны на этого пользователя.')
+
+    @action(detail=False, methods=['get'],
+            permission_classes=[IsAuthenticated])
+    def subscriptions(self, request):
+        queryset = User.objects.filter(authors__user=request.user)
+        recipes_limit = request.query_params.get('recipes_limit')
+        page = self.paginate_queryset(queryset)
+        if page is not None:
+            serializer = UserWithRecipesSerializer(
+                page, many=True,
+                context={'request': request, 'recipes_limit': recipes_limit}
+            )
+            return self.get_paginated_response(serializer.data)
+        serializer = UserWithRecipesSerializer(
+            queryset, many=True,
+            context={'request': request, 'recipes_limit': recipes_limit}
+        )
+        return Response(serializer.data)
+
+    @action(detail=False, methods=['put', 'delete'], url_path='me/avatar',
+            permission_classes=[IsAuthenticated])
+    def avatar(self, request):
         user = request.user
         if request.method == 'PUT':
-            avatar = request.data.get('avatar')
-            if not avatar:
-                return Response({'avatar': 'Поле "avatar" обязательно.'}, status=status.HTTP_400_BAD_REQUEST)
-            user.avatar = avatar
+            avatar_data = request.data.get('avatar')
+            if not avatar_data:
+                raise ValidationError('Требуются данные для аватара.')
+            try:
+                format, imgstr = avatar_data.split(';base64,')
+            except ValueError:
+                raise ValidationError(
+                    'Недопустимый формат аватара. Ожидаемое - base64.'
+                )
+            ext = format.split('/')[-1]
+            avatar_file = ContentFile(base64.b64decode(imgstr),
+                                      name=f'avatar.{ext}')
+            if user.avatar:
+                user.avatar.delete(save=False)
+            user.avatar = avatar_file
             user.save()
-            return Response({'avatar': user.avatar.url}, status=status.HTTP_200_OK)
-
+            return Response({'avatar': user.avatar.url})
         if user.avatar:
             user.avatar.delete(save=True)
-            user.avatar = None
-            user.save()
-        return Response({'avatar': None}, status=status.HTTP_204_NO_CONTENT)
-
-    @action(detail=True, methods=['post'], permission_classes=[IsAuthenticated], url_path='subscribe')
-    def subscribe(self, request, pk):
-        author = User.objects.filter(pk=pk).first()
-        if not author:
-            return Response({'detail': 'Пользователь не найден.'}, status=status.HTTP_404_NOT_FOUND)
-        if author.id == request.user.id:
-            return Response({'detail': 'Нельзя подписаться на себя.'}, status=status.HTTP_400_BAD_REQUEST)
-        if Subscription.objects.filter(user=request.user, author=author).exists():
-            return Response({'detail': 'Вы уже подписаны.'}, status=status.HTTP_400_BAD_REQUEST)
-        Subscription.objects.create(user=request.user, author=author)
-        recipes_limit = request.query_params.get('recipes_limit', 10)
-        try:
-            recipes_limit = int(recipes_limit)
-        except ValueError:
-            return Response({'detail': 'Некорректное значение для параметра recipes_limit.'}, status=status.HTTP_400_BAD_REQUEST)
-        recipes = author.recipes.all()[:recipes_limit]
-        recipes_data = SubscriptionRecipeSerializer(recipes, many=True, context=self.get_serializer_context()).data
-        data = {
-            'id': author.id,
-            'username': author.username,
-            'recipes': recipes_data,
-        }
-        return Response(data, status=status.HTTP_201_CREATED)
-
-
-    @subscribe.mapping.delete
-    def unsubscribe(self, request, pk):
-        try:
-            author = User.objects.get(pk=pk)
-        except User.DoesNotExist:
-            return Response({'detail': 'Пользователь не найден.'}, status=status.HTTP_400_BAD_REQUEST)
-        subscription = Subscription.objects.filter(user=request.user, author=author)
-        if not subscription.exists():
-            return Response({'detail': 'Вы не подписаны на этого пользователя.'}, status=status.HTTP_400_BAD_REQUEST)
-        subscription.delete()
         return Response(status=status.HTTP_204_NO_CONTENT)
-
-
-    @action(detail=False, methods=['get'], permission_classes=[IsAuthenticated], url_path='subscriptions')
-    def get_subscriptions(self, request):
-        subscriptions = Subscription.objects.filter(user=request.user)
-        recipes_limit = request.query_params.get('recipes_limit', 10)
-        try:
-            recipes_limit = int(recipes_limit)
-        except ValueError:
-            return Response({'detail': 'Некорректное значение для параметра recipes_limit.'}, status=status.HTTP_400_BAD_REQUEST)
-
-        paginator = PageToOffsetPagination()
-        result_page = paginator.paginate_queryset(subscriptions, request)
-
-        subscriptions_data = []
-        for subscription in result_page:
-            recipes = subscription.author.recipes.all()[:recipes_limit]
-            recipes_data = SubscriptionRecipeSerializer(recipes, many=True, context=self.get_serializer_context()).data
-            subscriptions_data.append({
-                'author_id': subscription.author.id,
-                'author_username': subscription.author.username,
-                'recipes': recipes_data,
-            })
-
-        return paginator.get_paginated_response(subscriptions_data)
-

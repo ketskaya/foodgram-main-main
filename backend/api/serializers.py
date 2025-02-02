@@ -1,6 +1,7 @@
 from rest_framework import serializers
 from collections import Counter
-from recipes.models import (Ingredient, Recipe, RecipeIngredient, FavoriteRecipe, ShoppingCart)
+from recipes.models import (Ingredient, Recipe, RecipeIngredient,
+                            FavoriteRecipe, ShoppingCart)
 from django.contrib.auth import get_user_model
 from djoser.serializers import UserSerializer
 from drf_extra_fields.fields import Base64ImageField
@@ -51,12 +52,6 @@ class RecipeIngredientSerializer(serializers.ModelSerializer):
     class Meta:
         model = RecipeIngredient
         fields = ('id', 'name', 'measurement_unit', 'amount')
-
-
-class SubscriptionRecipeSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = Recipe
-        fields = ('id', 'name', 'image', 'cooking_time')
 
 
 class RecipeSerializer(serializers.ModelSerializer):
@@ -124,14 +119,19 @@ class RecipeSerializer(serializers.ModelSerializer):
 
     def get_is_favorited(self, recipe):
         user = self.context['request'].user
-        if user.is_authenticated:
-            return FavoriteRecipe.objects.filter(user=user, recipe=recipe).exists()
-        return False
+        return user.is_authenticated and FavoriteRecipe.objects.filter(
+            user=user, recipe=recipe).exists()
 
     def get_is_in_shopping_cart(self, recipe):
         user = self.context['request'].user
         return user.is_authenticated and ShoppingCart.objects.filter(
             user=user, recipe=recipe).exists()
+
+
+class SubscriptionRecipeSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Recipe
+        fields = ('id', 'name', 'image', 'cooking_time')
 
 
 class UserWithRecipesSerializer(UsersSerializer):
@@ -148,11 +148,7 @@ class UserWithRecipesSerializer(UsersSerializer):
 
     def get_recipes(self, obj):
         request = self.context.get('request')
-        recipes_limit = request.query_params.get('recipes_limit', 10)
-        try:
-            recipes_limit = int(recipes_limit)
-        except ValueError:
-            recipes_limit = 10
+        recipes_limit = request.query_params.get('recipes_limit', 10**10)
         return SubscriptionRecipeSerializer(
-            obj.recipes.all()[:recipes_limit], many=True,
+            obj.recipes.all()[:int(recipes_limit)], many=True,
             context=self.context).data
