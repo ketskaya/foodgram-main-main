@@ -9,7 +9,7 @@ from django_filters.rest_framework import DjangoFilterBackend
 
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
-from rest_framework.exceptions import ValidationError, AuthenticationFailed, NotFound
+from rest_framework.exceptions import ValidationError, AuthenticationFailed
 from rest_framework.filters import SearchFilter
 from rest_framework.permissions import (IsAuthenticated,
                                         IsAuthenticatedOrReadOnly)
@@ -60,12 +60,15 @@ class RecipeViewSet(ModelViewSet):
             raise AuthenticationFailed(
                 'Вы должны быть авторизованы для создания рецепта.'
             )
-        print("Переданные данные для создания рецепта:", serializer.validated_data)
+        print("Переданные данные для создания рецепта:",
+              serializer.validated_data)
         serializer.save(author=user)
 
     @staticmethod
-    def handle_recipe_action(model, user, recipe, action_type, serializer_class):
-        serializer = serializer_class(data={'user': user.id, 'recipe': recipe.id})
+    def handle_recipe_action(model, user, recipe, action_type,
+                             serializer_class):
+        serializer = serializer_class(data={'user': user.id,
+                                            'recipe': recipe.id})
         if action_type == 'add':
             if not serializer.is_valid():
                 raise ValidationError(serializer.errors)
@@ -159,25 +162,38 @@ class UserViewSet(DjoserUserViewSet):
     def me(self, request, *args, **kwargs):
         return super().me(request, *args, **kwargs)
 
-    @action(detail=True, methods=['post', 'delete'], permission_classes=[IsAuthenticated])
+    @action(detail=True, methods=['post', 'delete'],
+            permission_classes=[IsAuthenticated])
     def subscribe(self, request, id=None):
         author = self.get_object()
         if request.method == 'POST':
-            if Subscription.objects.filter(user=request.user, author=author).exists():
-                user_data = UserWithRecipesSerializer(author, context={'request': request}).data
+            if Subscription.objects.filter(user=request.user,
+                                           author=author).exists():
+                user_data = UserWithRecipesSerializer(
+                    author, context={'request': request}
+                ).data
                 return Response(user_data, status=status.HTTP_400_BAD_REQUEST)
-            serializer = SubscriptionSerializer(data={'author': author.id, 'user': request.user.id}, context={'request': request})
+            serializer = SubscriptionSerializer(
+                data={'author': author.id, 'user': request.user.id},
+                context={'request': request}
+            )
             if serializer.is_valid():
                 serializer.save()
-                user_data = UserWithRecipesSerializer(author, context={'request': request}).data
+                user_data = UserWithRecipesSerializer(
+                    author, context={'request': request}
+                ).data
                 return Response(user_data, status=status.HTTP_201_CREATED)
-            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+            return Response(serializer.errors,
+                            status=status.HTTP_400_BAD_REQUEST)
         if request.method == 'DELETE':
-            serializer = SubscriptionDeleteSerializer(data={'author': author.id}, context={'request': request})
+            serializer = SubscriptionDeleteSerializer(
+                data={'author': author.id}, context={'request': request}
+            )
             if serializer.is_valid():
                 serializer.save()
                 return Response(status=status.HTTP_204_NO_CONTENT)
-            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+            return Response(serializer.errors,
+                            status=status.HTTP_400_BAD_REQUEST)
 
     @action(detail=False, methods=['get'],
             permission_classes=[IsAuthenticated])
@@ -185,8 +201,8 @@ class UserViewSet(DjoserUserViewSet):
         queryset = User.objects.filter(authors__user=request.user)
         page = self.paginate_queryset(queryset)
         if page is not None:
-            serializer = UserWithRecipesSerializer(page, many=True,
-                                                   context={'request': request})
+            serializer = UserWithRecipesSerializer(
+                page, many=True, context={'request': request})
             return self.get_paginated_response(serializer.data)
         serializer = UserWithRecipesSerializer(queryset, many=True,
                                                context={'request': request})

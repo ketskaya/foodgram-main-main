@@ -1,6 +1,3 @@
-import base64
-
-from django.core.files.base import ContentFile
 from django.contrib.auth import get_user_model
 from rest_framework import serializers
 from rest_framework.exceptions import ValidationError
@@ -12,16 +9,6 @@ from recipes.models import (Ingredient, Recipe, RecipeIngredient,
 from .constants import MIN_COOKING_TIME, MAX_COOKING_TIME
 
 User = get_user_model()
-
-
-class Base64ImageField(serializers.ImageField):
-
-    def to_internal_value(self, data):
-        if isinstance(data, str) and data.startswith('data:image'):
-            format, imgstr = data.split(';base64,') 
-            ext = format.split('/')[-1]
-            data = ContentFile(base64.b64decode(imgstr), name='temp.' + ext)
-        return super().to_internal_value(data)
 
 
 class UsersSerializer(UserSerializer):
@@ -138,10 +125,12 @@ class RecipeSerializer(serializers.ModelSerializer):
 
     def to_representation(self, instance):
         representation = super().to_representation(instance)
-        print(f"Результат сериализации: {representation}")
-        representation['is_favorited'] = self.get_is_favorited(instance)
-        representation['is_in_shopping_cart'] = (self.get_is_in_shopping_cart(instance))
+        is_favorited = self.get_is_favorited(instance)
+        is_in_shopping_cart = self.get_is_in_shopping_cart(instance)
+        representation['is_favorited'] = is_favorited
+        representation['is_in_shopping_cart'] = is_in_shopping_cart
         return representation
+
 
 class SubscriptionSerializer(serializers.ModelSerializer):
     author = serializers.PrimaryKeyRelatedField(queryset=User.objects.all())
@@ -153,13 +142,17 @@ class SubscriptionSerializer(serializers.ModelSerializer):
 
     def validate_author(self, value):
         if self.context['request'].user == value:
-            raise serializers.ValidationError('Нельзя подписаться на самого себя.')
+            raise serializers.ValidationError(
+                'Нельзя подписаться на самого себя.'
+            )
         return value
 
     def create(self, validated_data):
         user = self.context['request'].user
         author = validated_data['author']
-        existing_subscription = Subscription.objects.filter(user=user, author=author).first()
+        subscription_query = Subscription.objects.filter(user=user,
+                                                         author=author)
+        existing_subscription = subscription_query.first()
         if existing_subscription:
             return existing_subscription
         subscription = Subscription.objects.create(user=user, author=author)
@@ -167,9 +160,11 @@ class SubscriptionSerializer(serializers.ModelSerializer):
 
 
 class SubscriptionDeleteSerializer(serializers.ModelSerializer):
+
     class Meta:
         model = Subscription
         fields = ['author']
+
     def validate(self, attrs):
         user = self.context['request'].user
         author = attrs.get('author')
@@ -178,6 +173,7 @@ class SubscriptionDeleteSerializer(serializers.ModelSerializer):
                 'Вы не подписаны на этого пользователя.'
             )
         return attrs
+
     def save(self):
         user = self.context['request'].user
         author = self.validated_data['author']
@@ -202,10 +198,10 @@ class UserWithRecipesSerializer(UsersSerializer):
             'recipes', 'recipes_count'
         )
 
-    def get_recipes(self, obj): 
-        request = self.context.get('request') 
+    def get_recipes(self, obj):
+        request = self.context.get('request')
         recipes_limit = request.query_params.get('recipes_limit', 10**10)
-        return SubscriptionRecipeSerializer( 
+        return SubscriptionRecipeSerializer(
             obj.recipes.all()[:int(recipes_limit)], many=True,
             context=self.context).data
 
