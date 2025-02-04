@@ -3,19 +3,26 @@ from django.utils.safestring import mark_safe
 from django.contrib.auth.admin import UserAdmin as BaseUserAdmin
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import Group
-from .models import Ingredient, Recipe, Subscription, RecipeIngredient, ShoppingCart, FavoriteRecipe
+
+from .models import (Ingredient, Recipe, Subscription, RecipeIngredient,
+                     ShoppingCart)
 
 User = get_user_model()
 
+
 @admin.register(User)
-class CustomUserAdmin(BaseUserAdmin):
-    list_display = ('id', 'username', 'get_full_name', 'email', 'avatar_preview', 'recipe_total', 'following_count', 'followers_count')
+class UserAdmin(BaseUserAdmin):
+    list_display = ('id', 'username', 'get_full_name', 'email',
+                    'avatar_preview', 'recipe_total', 'following_count',
+                    'followers_count')
     search_fields = ('username', 'email')
     list_filter = ('is_active', 'is_staff')
     fieldsets = (
         (None, {'fields': ('username', 'password')}),
-        ('Персональная информация', {'fields': ('first_name', 'last_name', 'email', 'avatar')}),
-        ('Права доступа', {'fields': ('is_active', 'is_staff', 'is_superuser', 'groups', 'user_permissions')}), 
+        ('Персональная информация', {'fields': ('first_name', 'last_name',
+                                                'email', 'avatar')}),
+        ('Права доступа', {'fields': ('is_active', 'is_staff', 'is_superuser',
+                                      'groups', 'user_permissions')}),
         ('Даты', {'fields': ('last_login', 'date_joined')}),
     )
     ordering = ('username',)
@@ -28,7 +35,9 @@ class CustomUserAdmin(BaseUserAdmin):
     @admin.display(description='Аватар')
     @mark_safe
     def avatar_preview(self, user) -> str:
-        return f'<img src="{getattr(user.avatar, "url", "")}" style="width: 40px; height: 40px; border-radius: 50%;">' if user.avatar else ''
+        return (f'<img src="{getattr(user.avatar, "url", "")}" '
+                'style="width: 40px; height: 40px; border-radius: 50%;">'
+                if user.avatar else '')
 
     @admin.display(description='Количество рецептов')
     def recipe_total(self, user) -> int:
@@ -53,6 +62,7 @@ class SubscriptionAdmin(admin.ModelAdmin):
 class RecipeIngredientInline(admin.TabularInline):
     model = RecipeIngredient
     extra = 1
+    min_num = 1
 
 
 @admin.register(Ingredient)
@@ -70,10 +80,10 @@ class CookingTimeCategory(admin.SimpleListFilter):
         times = Recipe.objects.values_list('cooking_time', flat=True)
         if not times:
             return []
-        
         sorted_times = sorted(set(times))
         third = len(sorted_times) // 3
-        low, mid, high = sorted_times[third], sorted_times[2 * third], sorted_times[-1]
+        low = sorted_times[third]
+        mid = sorted_times[2 * third]
 
         return [
             ('short', f'До {low} мин'),
@@ -93,7 +103,9 @@ class CookingTimeCategory(admin.SimpleListFilter):
 
 @admin.register(Recipe)
 class RecipeAdmin(admin.ModelAdmin):
-    list_display = ('id', 'name', 'cooking_time', 'author', 'get_favorite_count', 'show_ingredients_list', 'preview_image')
+    list_display = ('id', 'name', 'cooking_time', 'author',
+                    'get_favorite_count', 'show_ingredients_list',
+                    'preview_image')
     search_fields = ('name', 'author__username')
     list_filter = (CookingTimeCategory, 'author')
     inlines = (RecipeIngredientInline,)
@@ -103,18 +115,22 @@ class RecipeAdmin(admin.ModelAdmin):
     @mark_safe
     def show_ingredients_list(self, recipe) -> str:
         return '<br>'.join(
-            f'{ri.ingredient.name} - {ri.amount} {ri.ingredient.measurement_unit}'
+            f'{ri.ingredient.name} - {ri.amount} '
+            f'{ri.ingredient.measurement_unit}'
             for ri in recipe.recipe_ingredients.all()
         )
 
     @admin.display(description='Изображение')
     @mark_safe
     def preview_image(self, recipe) -> str:
-        return f'<img src="{recipe.image.url}" width="100" height="100" style="border-radius: 8px;">' if recipe.image else ''
+        return (f'<img src="{recipe.image.url}" '
+                'width="100" height="100" '
+                'style="border-radius: 8px;">'
+                if recipe.image else '')
 
     @admin.display(description='В избранном')
     def get_favorite_count(self, recipe) -> int:
-        return FavoriteRecipe.objects.filter(recipe=recipe).count()
+        return recipe.favorites.count()
 
 
 @admin.register(ShoppingCart)

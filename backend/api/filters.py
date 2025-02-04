@@ -1,5 +1,6 @@
 from django.db.models import OuterRef, Exists
 from django_filters import rest_framework
+
 from recipes.models import ShoppingCart, FavoriteRecipe, Recipe
 
 
@@ -23,15 +24,14 @@ class RecipeFilter(rest_framework.FilterSet):
                         )
                     )
                 )
-            else:
-                return shoppingcart.exclude(
-                    Exists(
-                        ShoppingCart.objects.filter(
-                            user=self.request.user,
-                            recipe=OuterRef('pk')
-                        )
+            return shoppingcart.exclude(
+                Exists(
+                    ShoppingCart.objects.filter(
+                        user=self.request.user,
+                        recipe=OuterRef('pk')
                     )
                 )
+            )
         return shoppingcart
 
     def filter_is_favorited(self, favorite, name, value):
@@ -45,13 +45,12 @@ class RecipeFilter(rest_framework.FilterSet):
                         )
                     )
                 )
-            else:
-                return favorite.exclude(
-                    Exists(
-                        FavoriteRecipe.objects.filter(
-                            user=self.request.user,
-                            recipe=OuterRef('pk')
-                        )
+            return favorite.exclude(
+                Exists(
+                    FavoriteRecipe.objects.filter(
+                        user=self.request.user,
+                        recipe=OuterRef('pk')
                     )
                 )
+            )
         return favorite
