@@ -6,7 +6,8 @@ from djoser.serializers import UserSerializer
 
 from recipes.models import (Ingredient, Recipe, RecipeIngredient,
                             FavoriteRecipe, ShoppingCart, Subscription)
-from .constants import MIN_COOKING_TIME, MAX_COOKING_TIME
+from .constants import (MIN_COOKING_TIME, MAX_COOKING_TIME,
+                        MIN_INGREDIENT_AMOUNT, MAX_INGREDIENT_AMOUNT)
 
 User = get_user_model()
 
@@ -24,10 +25,7 @@ class UsersSerializer(UserSerializer):
 
     def get_is_subscribed(self, author):
         user = self.context['request'].user
-        if user.is_authenticated:
-            has_subscription = user.followers.filter(author=author).exists()
-            return has_subscription
-        return False
+        return user.is_authenticated and user.followers.filter(author=author).exists()
 
 
 class IngredientSerializer(serializers.ModelSerializer):
@@ -48,7 +46,10 @@ class RecipeIngredientSerializer(serializers.ModelSerializer):
         source='ingredient.measurement_unit',
         read_only=True
     )
-    amount = serializers.IntegerField(min_value=1)
+    amount = serializers.IntegerField(
+        min_value=MIN_INGREDIENT_AMOUNT,
+        max_value=MAX_INGREDIENT_AMOUNT
+    )
 
     class Meta:
         model = RecipeIngredient
@@ -73,7 +74,7 @@ class RecipeSerializer(serializers.ModelSerializer):
         )
 
     def validate(self, data):
-        ingredients_data = data.get('recipe_ingredients', [])
+        ingredients_data = data.get('recipe_ingredients')
         if not ingredients_data:
             raise serializers.ValidationError(
                 'Необходимо добавить хотя бы один ингредиент.'
@@ -83,10 +84,12 @@ class RecipeSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError(
                 'Ингредиенты не могут повторяться.'
             )
-        image = data.get('image', None)
+        self.validate_image(data.get('image'))
+        return data
+
+    def validate_image(self, image):
         if not image:
             raise serializers.ValidationError('Необходимо добавить фото.')
-        return data
 
     def save_ingredients(self, recipe, ingredients_data):
         RecipeIngredient.objects.bulk_create(
@@ -146,17 +149,13 @@ class SubscriptionSerializer(serializers.ModelSerializer):
                 'Нельзя подписаться на самого себя.'
             )
         return value
-
-    def create(self, validated_data):
-        user = self.context['request'].user
-        author = validated_data['author']
-        subscription_query = Subscription.objects.filter(user=user,
-                                                         author=author)
-        existing_subscription = subscription_query.first()
-        if existing_subscription:
-            return existing_subscription
-        subscription = Subscription.objects.create(user=user, author=author)
-        return subscription
+    
+    def to_representation(self, instance):
+        representation = super().to_representation(instance)
+        author = instance.author
+        representation['recipes'] = SubscriptionRecipeSerializer(
+            author.recipes.all(), many=True, context=self.context).data
+        return representation
 
 
 class SubscriptionDeleteSerializer(serializers.ModelSerializer):
@@ -205,14 +204,6 @@ class UserWithRecipesSerializer(UsersSerializer):
             obj.recipes.all()[:int(recipes_limit)], many=True,
             context=self.context).data
 
-    def to_representation(self, instance):
-        representation = super().to_representation(instance)
-        representation['recipes'] = self.get_recipes(instance)
-        representation['recipes_count'] = instance.recipes.count()
-        if 'subscription' in representation:
-            del representation['subscription']
-        return representation
-
 
 class FavoriteRecipeSerializer(serializers.ModelSerializer):
 
@@ -225,6 +216,12 @@ class FavoriteRecipeSerializer(serializers.ModelSerializer):
                                          recipe=attrs['recipe']).exists():
             raise ValidationError('Рецепт уже добавлен в избранное.')
         return attrs
+    
+    def to_representation(self, instance):
+        representation = super().to_representation(instance)
+        representation['recipe'] = SubscriptionRecipeSerializer(
+            instance.recipe, context=self.context).data
+        return representation
 
 
 class ShoppingCartSerializer(serializers.ModelSerializer):
@@ -238,3 +235,9 @@ class ShoppingCartSerializer(serializers.ModelSerializer):
                                        recipe=attrs['recipe']).exists():
             raise ValidationError('Рецепт уже добавлен в корзину покупок.')
         return attrs
+    
+    def to_representation(self, instance):
+        representation = super().to_representation(instance)
+        representation['recipe'] = SubscriptionRecipeSerializer(
+            instance.recipe, context=self.context).data
+        return representation

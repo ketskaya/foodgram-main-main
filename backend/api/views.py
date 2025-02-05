@@ -2,6 +2,7 @@ import base64
 from collections import Counter
 
 from django.core.files.base import ContentFile
+from django.db.models import Sum
 from django.http import HttpResponse
 from django.shortcuts import get_object_or_404
 from django.urls import reverse
@@ -26,7 +27,8 @@ from .permissions import IsAuthorOrReadOnly
 from .serializers import (IngredientSerializer, RecipeSerializer,
                           UsersSerializer, UserWithRecipesSerializer,
                           ShoppingCartSerializer, FavoriteRecipeSerializer,
-                          SubscriptionSerializer, SubscriptionDeleteSerializer)
+                          SubscriptionSerializer, SubscriptionDeleteSerializer,
+                          SubscriptionRecipeSerializer)
 
 
 class IngredientViewSet(viewsets.ReadOnlyModelViewSet):
@@ -46,7 +48,7 @@ class IngredientViewSet(viewsets.ReadOnlyModelViewSet):
 class RecipeViewSet(ModelViewSet):
     queryset = Recipe.objects.select_related("author").all()
     serializer_class = RecipeSerializer
-    permission_classes = [IsAuthorOrReadOnly]
+    permission_classes = [IsAuthenticatedOrReadOnly, IsAuthorOrReadOnly]
     pagination_class = PageToOffsetPagination
     filter_backends = (DjangoFilterBackend,)
     filterset_class = RecipeFilter
@@ -56,29 +58,17 @@ class RecipeViewSet(ModelViewSet):
 
     def perform_create(self, serializer):
         user = self.request.user
-        if not user.is_authenticated:
-            raise AuthenticationFailed(
-                'Вы должны быть авторизованы для создания рецепта.'
-            )
-        print("Переданные данные для создания рецепта:",
-              serializer.validated_data)
         serializer.save(author=user)
 
     @staticmethod
     def handle_recipe_action(model, user, recipe, action_type,
                              serializer_class):
-        serializer = serializer_class(data={'user': user.id,
-                                            'recipe': recipe.id})
+        serializer = SubscriptionRecipeSerializer(recipe, context={'request': user})
         if action_type == 'add':
-            if not serializer.is_valid():
-                raise ValidationError(serializer.errors)
-            serializer.save()
-            return Response({
-                'id': recipe.id,
-                'name': recipe.name,
-                'image': recipe.image.url if recipe.image else None,
-                'cooking_time': recipe.cooking_time
-            }, status=status.HTTP_201_CREATED)
+            action_serializer = serializer_class(data={'user': user.id, 'recipe': recipe.id})
+            action_serializer.is_valid(raise_exception=True)
+            action_serializer.save()
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
         elif action_type == 'remove':
             instance = model.objects.filter(user=user, recipe=recipe).first()
             if not instance:
@@ -139,13 +129,15 @@ class RecipeViewSet(ModelViewSet):
 
     def generate_shopping_cart_text(self, shopping_cart):
         ingredients_counter = Counter()
-        for item in shopping_cart:
-            recipe = item.recipe
-            for recipe_ingredient in recipe.recipe_ingredients.all():
-                ingredient = recipe_ingredient.ingredient
-                ingredients_counter[ingredient.name] += (
-                    recipe_ingredient.amount
-                )
+        ingredients_data = (
+            Ingredient.objects
+            .filter(recipeingredient__recipe__shoppingcart__in=shopping_cart)
+            .annotate(amount_sum=Sum('recipeingredient__amount'))
+            .values('name', 'amount_sum')
+            .order_by('name')
+        )
+        for ingredient in ingredients_data:
+            ingredients_counter[ingredient['name']] += ingredient['amount_sum']
         shopping_list = 'Список покупок:\n\n'
         for ingredient_name, total_amount in ingredients_counter.items():
             shopping_list += f'- {ingredient_name}: {total_amount} шт.\n'
@@ -162,51 +154,34 @@ class UserViewSet(DjoserUserViewSet):
     def me(self, request, *args, **kwargs):
         return super().me(request, *args, **kwargs)
 
-    @action(detail=True, methods=['post', 'delete'],
-            permission_classes=[IsAuthenticated])
+    @action(detail=True, methods=['post', 'delete'], permission_classes=[IsAuthenticated])
     def subscribe(self, request, id=None):
         author = self.get_object()
         if request.method == 'POST':
-            if Subscription.objects.filter(user=request.user,
-                                           author=author).exists():
-                user_data = UserWithRecipesSerializer(
-                    author, context={'request': request}
-                ).data
-                return Response(user_data, status=status.HTTP_400_BAD_REQUEST)
             serializer = SubscriptionSerializer(
                 data={'author': author.id, 'user': request.user.id},
                 context={'request': request}
             )
-            if serializer.is_valid():
-                serializer.save()
+            if serializer.is_valid(raise_exception=True): 
                 user_data = UserWithRecipesSerializer(
                     author, context={'request': request}
                 ).data
                 return Response(user_data, status=status.HTTP_201_CREATED)
-            return Response(serializer.errors,
-                            status=status.HTTP_400_BAD_REQUEST)
-        if request.method == 'DELETE':
-            serializer = SubscriptionDeleteSerializer(
-                data={'author': author.id}, context={'request': request}
-            )
-            if serializer.is_valid():
-                serializer.save()
-                return Response(status=status.HTTP_204_NO_CONTENT)
-            return Response(serializer.errors,
-                            status=status.HTTP_400_BAD_REQUEST)
+        serializer = SubscriptionDeleteSerializer(
+            data={'author': author.id}, context={'request': request}
+        )
+        if serializer.is_valid(raise_exception=True):
+            serializer.save()
+            return Response(status=status.HTTP_204_NO_CONTENT)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
     @action(detail=False, methods=['get'],
             permission_classes=[IsAuthenticated])
     def subscriptions(self, request):
         queryset = User.objects.filter(authors__user=request.user)
         page = self.paginate_queryset(queryset)
-        if page is not None:
-            serializer = UserWithRecipesSerializer(
-                page, many=True, context={'request': request})
-            return self.get_paginated_response(serializer.data)
-        serializer = UserWithRecipesSerializer(queryset, many=True,
-                                               context={'request': request})
-        return Response(serializer.data)
+        serializer = UserWithRecipesSerializer(page, many=True, context={'request': request})
+        return self.get_paginated_response(serializer.data)
 
     @action(detail=False, methods=['put', 'delete'], url_path='me/avatar',
             permission_classes=[IsAuthenticated])

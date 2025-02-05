@@ -6,7 +6,8 @@ from django.contrib.auth.models import AbstractUser
 from .constants import (MIN_COOKING_TIME, MIN_AMOUNT, MAX_EMAIL_LENGTH,
                         MAX_NAME_LENGTH, USERNAME_REGEX,
                         MAX_INGREDIENT_NAME_LENGTH,
-                        MAX_MEASUREMENT_UNIT_LENGTH, MAX_RECIPE_NAME_LENGTH)
+                        MAX_MEASUREMENT_UNIT_LENGTH, MAX_RECIPE_NAME_LENGTH,
+                        MAX_STR_LENGTH_FOR_DISPLAY)
 
 
 class User(AbstractUser):
@@ -108,7 +109,7 @@ class Ingredient(models.Model):
         ]
 
     def __str__(self):
-        return self.name[:30]
+        return self.name[:MAX_STR_LENGTH_FOR_DISPLAY]
 
 
 class Recipe(models.Model):
@@ -140,7 +141,7 @@ class Recipe(models.Model):
         ordering = ['-created_at']
 
     def __str__(self):
-        return self.name[:30]
+        return self.name[:MAX_STR_LENGTH_FOR_DISPLAY]
 
 
 class RecipeIngredient(models.Model):
@@ -173,7 +174,7 @@ class RecipeIngredient(models.Model):
         ordering = ['recipe', 'ingredient']
 
     def __str__(self):
-        return f'{self.recipe.name[:30]} - {self.ingredient.name[:30]}'
+        return f'{self.recipe.name[:MAX_STR_LENGTH_FOR_DISPLAY]} - {self.ingredient.name[:MAX_STR_LENGTH_FOR_DISPLAY]}'
 
 
 class BaseUserRecipeModel(models.Model):
@@ -195,7 +196,7 @@ class BaseUserRecipeModel(models.Model):
         ordering = ('-user',)
 
     def __str__(self):
-        return f'{self.user.username[:30]} добавил {self.recipe.name[:30]}'
+        return f'{self.user.username[:MAX_STR_LENGTH_FOR_DISPLAY]} добавил {self.recipe.name[:MAX_STR_LENGTH_FOR_DISPLAY]}'
 
 
 class FavoriteRecipe(BaseUserRecipeModel):

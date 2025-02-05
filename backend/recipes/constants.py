@@ -11,3 +11,6 @@ MAX_RECIPE_NAME_LENGTH = 256  # Длина для name в Recipe
 
 # Паттерн для логина пользователя
 USERNAME_REGEX = r'^[\w.@+-]+$'
+
+# Максимальная длина отображаемых строк
+MAX_STR_LENGTH_FOR_DISPLAY = 30
