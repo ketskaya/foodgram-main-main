@@ -26,7 +26,7 @@
 
 2. Перейдите в директорию `infra`:
    
-   `cd foodgram-st/infra`
+   `cd infra`
 
 3. Создайте файл .env на основе .env.example:
    

@@ -25,7 +25,10 @@ class UsersSerializer(UserSerializer):
 
     def get_is_subscribed(self, author):
         user = self.context['request'].user
-        return user.is_authenticated and user.followers.filter(author=author).exists()
+        return (
+            user.is_authenticated
+            and user.followers.filter(author=author).exists()
+        )
 
 
 class IngredientSerializer(serializers.ModelSerializer):
@@ -149,7 +152,7 @@ class SubscriptionSerializer(serializers.ModelSerializer):
                 'Нельзя подписаться на самого себя.'
             )
         return value
-    
+
     def to_representation(self, instance):
         representation = super().to_representation(instance)
         author = instance.author
@@ -216,7 +219,7 @@ class FavoriteRecipeSerializer(serializers.ModelSerializer):
                                          recipe=attrs['recipe']).exists():
             raise ValidationError('Рецепт уже добавлен в избранное.')
         return attrs
-    
+
     def to_representation(self, instance):
         representation = super().to_representation(instance)
         representation['recipe'] = SubscriptionRecipeSerializer(
@@ -235,7 +238,7 @@ class ShoppingCartSerializer(serializers.ModelSerializer):
                                        recipe=attrs['recipe']).exists():
             raise ValidationError('Рецепт уже добавлен в корзину покупок.')
         return attrs
-    
+
     def to_representation(self, instance):
         representation = super().to_representation(instance)
         representation['recipe'] = SubscriptionRecipeSerializer(

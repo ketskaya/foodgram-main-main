@@ -174,7 +174,10 @@ class RecipeIngredient(models.Model):
         ordering = ['recipe', 'ingredient']
 
     def __str__(self):
-        return f'{self.recipe.name[:MAX_STR_LENGTH_FOR_DISPLAY]} - {self.ingredient.name[:MAX_STR_LENGTH_FOR_DISPLAY]}'
+        return (
+            f'{self.recipe.name[:MAX_STR_LENGTH_FOR_DISPLAY]} - '
+            f'{self.ingredient.name[:MAX_STR_LENGTH_FOR_DISPLAY]}'
+        )
 
 
 class BaseUserRecipeModel(models.Model):
@@ -196,7 +199,10 @@ class BaseUserRecipeModel(models.Model):
         ordering = ('-user',)
 
     def __str__(self):
-        return f'{self.user.username[:MAX_STR_LENGTH_FOR_DISPLAY]} добавил {self.recipe.name[:MAX_STR_LENGTH_FOR_DISPLAY]}'
+        return (
+            f'{self.user.username[:MAX_STR_LENGTH_FOR_DISPLAY]} добавил '
+            f'{self.recipe.name[:MAX_STR_LENGTH_FOR_DISPLAY]}'
+        )
 
 
 class FavoriteRecipe(BaseUserRecipeModel):

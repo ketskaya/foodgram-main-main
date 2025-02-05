@@ -10,7 +10,7 @@ from django_filters.rest_framework import DjangoFilterBackend
 
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
-from rest_framework.exceptions import ValidationError, AuthenticationFailed
+from rest_framework.exceptions import ValidationError
 from rest_framework.filters import SearchFilter
 from rest_framework.permissions import (IsAuthenticated,
                                         IsAuthenticatedOrReadOnly)
@@ -20,7 +20,7 @@ from rest_framework.viewsets import ModelViewSet
 from djoser.views import UserViewSet as DjoserUserViewSet
 
 from recipes.models import (Ingredient, Recipe, FavoriteRecipe, ShoppingCart,
-                            User, Subscription)
+                            User)
 from .filters import RecipeFilter
 from .pagination import PageToOffsetPagination
 from .permissions import IsAuthorOrReadOnly
@@ -63,9 +63,13 @@ class RecipeViewSet(ModelViewSet):
     @staticmethod
     def handle_recipe_action(model, user, recipe, action_type,
                              serializer_class):
-        serializer = SubscriptionRecipeSerializer(recipe, context={'request': user})
+        serializer = SubscriptionRecipeSerializer(
+            recipe,
+            context={'request': user}
+        )
         if action_type == 'add':
-            action_serializer = serializer_class(data={'user': user.id, 'recipe': recipe.id})
+            action_serializer = serializer_class(data={'user': user.id,
+                                                       'recipe': recipe.id})
             action_serializer.is_valid(raise_exception=True)
             action_serializer.save()
             return Response(serializer.data, status=status.HTTP_201_CREATED)
@@ -154,7 +158,8 @@ class UserViewSet(DjoserUserViewSet):
     def me(self, request, *args, **kwargs):
         return super().me(request, *args, **kwargs)
 
-    @action(detail=True, methods=['post', 'delete'], permission_classes=[IsAuthenticated])
+    @action(detail=True, methods=['post', 'delete'],
+            permission_classes=[IsAuthenticated])
     def subscribe(self, request, id=None):
         author = self.get_object()
         if request.method == 'POST':
@@ -162,25 +167,26 @@ class UserViewSet(DjoserUserViewSet):
                 data={'author': author.id, 'user': request.user.id},
                 context={'request': request}
             )
-            if serializer.is_valid(raise_exception=True): 
-                user_data = UserWithRecipesSerializer(
-                    author, context={'request': request}
-                ).data
-                return Response(user_data, status=status.HTTP_201_CREATED)
-        serializer = SubscriptionDeleteSerializer(
-            data={'author': author.id}, context={'request': request}
-        )
-        if serializer.is_valid(raise_exception=True):
+            serializer.is_valid(raise_exception=True)
             serializer.save()
-            return Response(status=status.HTTP_204_NO_CONTENT)
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+            user_data = UserWithRecipesSerializer(
+                author,
+                context={'request': request}
+            ).data
+            return Response(user_data, status=status.HTTP_201_CREATED)
+        serializer = SubscriptionDeleteSerializer(data={'author': author.id},
+                                                  context={'request': request})
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
     @action(detail=False, methods=['get'],
             permission_classes=[IsAuthenticated])
     def subscriptions(self, request):
         queryset = User.objects.filter(authors__user=request.user)
         page = self.paginate_queryset(queryset)
-        serializer = UserWithRecipesSerializer(page, many=True, context={'request': request})
+        serializer = UserWithRecipesSerializer(page, many=True,
+                                               context={'request': request})
         return self.get_paginated_response(serializer.data)
 
     @action(detail=False, methods=['put', 'delete'], url_path='me/avatar',
